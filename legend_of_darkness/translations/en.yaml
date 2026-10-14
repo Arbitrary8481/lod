@@ -1,0 +1,16 @@
+configuration:
+  forest_turns:
+    name: Forest fights per day
+    description: How many forest fights each player gets every game day.
+  pvp_fights:
+    name: Warrior fights per day
+    description: How many times a player may ambush other players each game day.
+  grave_fights:
+    name: Torments per day
+    description: How many souls a dead player may torment in the Shades to earn favour.
+  bank_interest:
+    name: Bank interest (%)
+    description: Interest paid on bank deposits at each new game day.
+  days_per_day:
+    name: Game days per real day
+    description: Split each real day into 1-4 game days for faster play.
