@@ -25,7 +25,9 @@ descend into the cavern to slay **the Shadow Wyrm**.
 - **Multiplayer**: ambush other players, a shared daily news feed, a hall of fame,
   and chat in the village square and the inn.
 - **Death** sends you to the Shades, where you can torment souls to earn an early return.
-- **Random forest events**: fairies, shrines, hermits, lost travellers and more.
+- **26 random forest encounters** with choices and gambles: treasure chests that bite,
+  witches, goblin dice, bandits, a wyrm hatchling's hoard, your own shadow and more.
+  New ones are added in `legend_of_darkness/app/game/events.py`.
 - Keyboard hotkeys and a layout that works on phones.
 
 ## Development

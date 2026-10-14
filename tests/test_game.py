@@ -7,7 +7,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "legend_of_darkness" / "app"))
 
 from game import data as D  # noqa: E402
-from game.engine import Game, max_hp, xp_needed  # noqa: E402
+from game.engine import Game, max_hp, xp_for_kill, xp_needed  # noqa: E402
+from game.events import EVENTS  # noqa: E402
 from game.store import Store  # noqa: E402
 
 
@@ -69,7 +70,7 @@ class GameTest(unittest.TestCase):
             elif p["loc"] == "fight":
                 self.game.act("u1", "fight.attack")
             elif p["loc"] == "event":
-                self.game.act("u1", p["allowed"][0])
+                self.game.act("u1", p["allowed"][-1])
             if self.p()["xp"] > 0:
                 break
         self.assertGreater(self.p()["xp"], 0)
@@ -189,6 +190,86 @@ class GameTest(unittest.TestCase):
         line = [t for t in screen["text"] if "Hello" in t][0]
         self.assertNotIn("<b>", line)
         self.assertNotIn("{R}H", line)
+
+    def test_event_definitions_are_valid(self):
+        known = {"gold", "gold_pct", "gems", "hp_pct", "turns", "charm", "xp", "max_hp",
+                 "atk", "def", "skill", "fight", "news"}
+        for key, ev in EVENTS.items():
+            self.assertTrue(("outcomes" in ev) != ("choices" in ev), key)
+            groups = [ev["outcomes"]] if "outcomes" in ev else [c["outcomes"] for c in ev["choices"]]
+            if "choices" in ev:
+                self.assertTrue(ev["intro"], key)
+                self.assertFalse(ev["choices"][-1].get("cost"), key + ": last choice must be free")
+            for outcomes in groups:
+                for weight, effects, text in outcomes:
+                    self.assertGreater(weight, 0, key)
+                    self.assertTrue(text, key)
+                    self.assertLessEqual(set(effects), known, key)
+
+    def test_every_event_choice_resolves(self):
+        self.make()
+        for level in (1, 8, 15):
+            for rich in (True, False):
+                for key, ev in EVENTS.items():
+                    for i in range(len(ev.get("choices", [{}]))):
+                        for _ in range(8):
+                            self.edit(level=level, hp=10 * level, turns=5, skill_uses=0,
+                                      gold=10000 if rich else 0, gems=5 if rich else 0,
+                                      alive=True, fight=None, event=None, loc="forest")
+                            if "outcomes" in ev:
+                                self.game.forest_event(p := self.p())
+                                self.game.store.save_player(p)
+                                continue
+                            self.edit(loc="event", event=key)
+                            self.game.view("u1")
+                            self.game.act("u1", "event.choose:%d" % i)
+                            p = self.p()
+                            self.assertIn(p["loc"], ("forest", "fight", "event"), key)
+                            self.assertGreaterEqual(p["hp"], 1, key)
+                            self.assertGreaterEqual(p["gold"], 0, key)
+                            self.assertGreaterEqual(p["turns"], 0, key)
+                            if p["loc"] == "event":
+                                self.assertFalse(rich, "%s choice %d blocked while rich" % (key, i))
+
+    def test_event_cost_blocks_and_lets_you_choose_again(self):
+        self.make()
+        self.edit(gems=0, loc="event", event="fairy")
+        self.game.view("u1")
+        screen = self.game.act("u1", "event.choose:0")
+        self.assertEqual(self.p()["loc"], "event")
+        self.assertTrue(any("no gems" in line for line in screen["text"]))
+        self.game.act("u1", "event.choose:1")
+        self.assertEqual(self.p()["loc"], "forest")
+
+    def test_event_paid_choice_shows_summary(self):
+        self.make()
+        self.edit(gold=1000, loc="event", event="caravan")
+        self.game.view("u1")
+        screen = self.game.act("u1", "event.choose:1")
+        p = self.p()
+        self.assertEqual((p["gems"], p["gold"]), (1, 1000 - 60))
+        self.assertTrue(any("-60 gold" in line and "+1 gem" in line for line in screen["text"]))
+
+    def test_event_fight_awards_bonus(self):
+        self.make()
+        self.edit(level=5, loc="event", event="doppelganger")
+        self.game.view("u1")
+        self.game.act("u1", "event.choose:0")
+        p = self.p()
+        self.assertEqual(p["loc"], "fight")
+        self.assertEqual(p["fight"]["name"], "Your Shadow")
+        self.assertEqual(p["fight"]["xp"], 3 * xp_for_kill(5))
+
+    def test_high_level_events_are_gated(self):
+        self.make()
+        seen = set()
+        for _ in range(400):
+            self.edit(level=1, loc="forest", event=None, fight=None)
+            p = self.p()
+            self.game.forest_event(p)
+            seen.add(p["event"])
+        self.assertNotIn("lady", seen)
+        self.assertNotIn("hatchling", seen)
 
     def test_multiple_days_per_real_day(self):
         game = Game(Store(":memory:"), {"days_per_day": 4}, clock=lambda: self.now)

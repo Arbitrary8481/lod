@@ -4,8 +4,10 @@ import math
 import random
 import re
 from datetime import datetime
+from string import Template
 
 from . import data as D
+from .events import EVENTS
 
 DEFAULT_OPTIONS = {
     "forest_turns": 20,
@@ -403,7 +405,7 @@ class Game:
         if p["turns"] <= 0:
             return
         p["turns"] -= 1
-        if self.rng.random() < 0.12:
+        if self.rng.random() < 0.15:
             p["turns"] += 1  # strange happenings don't cost a fight
             return self.forest_event(p)
         level = p["level"] + {"thrill": 1, "slum": -1}.get(arg, 0)
@@ -447,121 +449,148 @@ class Game:
     # --------------------------------------------------------------- events
 
     def forest_event(self, p):
-        events = ["gold", "gem", "fairy", "hermit", "shrine", "traveler", "trap", "camp"]
-        ev = self.rng.choice(events)
-        f = p["flash"]
-        lvl = p["level"]
-        if ev == "gold":
-            gold = self.rng.randint(10, 40) * lvl
-            p["gold"] += gold
-            f.append("{Y}You trip over a rotting pouch. Inside, {Y}%d{y} gold glints!{0}" % gold)
-        elif ev == "gem":
-            p["gems"] += 1
-            f.append("{C}Something sparkles in a stream bed. You fish out a gem!{0}")
-        elif ev == "trap":
-            loss = min(p["hp"] - 1, max(1, max_hp(p) // 5))
-            p["hp"] -= max(0, loss)
-            f.append("{r}The ground gives way! You tumble into a hunter's pit and lose "
-                     "%d hit points climbing out.{0}" % max(0, loss))
-        elif ev == "camp":
-            gold = self.rng.randint(3, 10) * lvl
-            heal = min(max_hp(p) - p["hp"], max(1, max_hp(p) * 15 // 100))
-            p["gold"] += gold
-            p["hp"] += max(0, heal)
-            f.append("{g}You find an abandoned camp. A few coins ({y}%d gold{g}) and a "
-                     "half-finished skin of wine restore you a little.{0}" % gold)
-        elif ev == "hermit":
-            if self.rng.random() < 0.5:
-                p["charm"] += 1
-                f.append("{G}An old hermit pinches your cheek. \"Such a pretty one!\" "
-                         "You feel more charming.{0} (+1 charm)")
-            else:
-                p["charm"] = max(0, p["charm"] - 1)
-                f.append("{r}An old hermit whacks you with an ugly stick. You feel less "
-                         "charming.{0} (-1 charm)")
-        else:
-            p["event"] = ev
-            p["loc"] = "event"
-            return
-        f.append("")
+        pool = [(k, e) for k, e in EVENTS.items() if p["level"] >= e.get("min_level", 1)]
+        key, ev = self._weighted(pool, lambda kv: kv[1]["weight"])
         p["loc"] = "forest"
+        if "outcomes" in ev:
+            self._resolve(p, ev["outcomes"])
+        else:
+            p["event"] = key
+            p["loc"] = "event"
+
+    def _weighted(self, items, weight):
+        roll = self.rng.uniform(0, sum(weight(i) for i in items))
+        for item in items:
+            roll -= weight(item)
+            if roll <= 0:
+                return item
+        return items[-1]
+
+    def _fill(self, text, p):
+        return Template(text).safe_substitute(
+            name=p["name"], village=D.VILLAGE, healer=D.HEALER, innkeeper=D.INNKEEPER)
 
     def view_event(self, p, s):
-        ev = p["event"]
-        if ev == "fairy":
-            s.say("{M}A tiny fairy darts out of the gloom and hovers before your nose.{0}",
-                  "\"Gem? Gem? Shiny gem for a gift?\" she pleads.")
-            s.section("The Fairy")
-            s.add("Give her a gem", "event.choose:yes", "G")
-            s.add("Shoo her away", "event.choose:no", "S")
-        elif ev == "shrine":
-            s.say("{m}You come upon a shrine of black stone, slick with old offerings. "
-                  "A whisper invites you to kneel.{0}")
-            s.section("The Shrine")
-            s.add("Kneel and pray", "event.choose:yes", "P")
-            s.add("Walk away", "event.choose:no", "W")
-        elif ev == "traveler":
-            s.say("{w}A lost merchant sits weeping beside a broken cart. \"Please, the road "
-                  "back to %s - which way?\"{0}" % D.VILLAGE,
-                  "Guiding them will cost you a forest fight.")
-            s.section("The Traveller")
-            s.add("Guide them home", "event.choose:yes", "G")
-            s.add("Point vaguely and leave", "event.choose:no", "L")
-        else:
+        ev = EVENTS.get(p["event"] or "")
+        if not ev or "choices" not in ev:
+            p["event"] = None
             p["loc"] = "forest"
             return self.view_forest(p, s)
+        s.say(*[self._fill(line, p) for line in ev["intro"]])
+        s.section("What Do You Do?")
+        for i, choice in enumerate(ev["choices"]):
+            s.add(self._fill(choice["label"], p), "event.choose:%d" % i)
 
     def do_event_choose(self, p, arg, value):
-        ev, p["event"] = p["event"], None
+        ev = EVENTS.get(p["event"] or "")
+        try:
+            choice = ev["choices"][int(arg)]
+        except (TypeError, KeyError, ValueError, IndexError):
+            return
+        cost = choice.get("cost", {})
+        price = {"gold": cost.get("gold", 0) * p["level"], "gems": cost.get("gems", 0),
+                 "turns": cost.get("turns", 0)}
+        if any(p[k] < v for k, v in price.items()):
+            # Can't pay: say so and let them pick something else.
+            p["flash"].append(self._fill(choice.get("broke", "{r}You can't afford that.{0}"), p))
+            return
+        for k, v in price.items():
+            p[k] -= v
+        p["event"] = None
         p["loc"] = "forest"
-        f = p["flash"]
-        yes = arg == "yes"
-        if ev == "fairy":
-            if not yes:
-                f.append("The fairy sticks out her tongue and zips away.")
-            elif p["gems"] < 1:
-                f.append("{r}You have no gems! The fairy kicks you in the nose and vanishes.{0}")
-            else:
-                p["gems"] -= 1
-                roll = self.rng.randint(1, 3)
-                if roll == 1:
-                    p["turns"] += 2
-                    f.append("{M}Fairy dust fills your lungs. You feel energised!{0} (+2 fights)")
-                elif roll == 2:
-                    p["bonus_hp"] += 1
-                    p["hp"] += 1
-                    f.append("{M}The fairy kisses your brow. You feel permanently hardier!{0} "
-                             "(+1 max HP)")
+        if choice.get("news"):
+            self.news(self._fill(choice["news"], p))
+        self._resolve(p, choice["outcomes"], price)
+
+    def _resolve(self, p, outcomes, paid=None):
+        _, effects, text = self._weighted(outcomes, lambda o: o[0])
+        parts = ["-%d %s" % (v, k if k != "turns" else "forest fights")
+                 for k, v in (paid or {}).items() if v]
+        p["flash"].append(self._fill(text, p))
+        fight = self._apply_effects(p, effects, parts)
+        if parts:
+            p["flash"].append("{w}(%s){0}" % ", ".join(parts))
+        p["flash"].append("")
+        if fight:
+            self._event_fight(p, fight)
+
+    def _apply_effects(self, p, effects, parts):
+        lvl = p["level"]
+        mhp = max_hp(p)
+
+        def note(n, one, many):
+            if n:
+                parts.append("%+d %s" % (n, one if abs(n) == 1 else many))
+
+        for key, val in effects.items():
+            if key == "gold":
+                if val > 0:
+                    n = int(round(val * lvl * self.rng.uniform(0.8, 1.2)))
                 else:
-                    p["hp"] = max(p["hp"], max_hp(p))
-                    f.append("{M}The fairy sings and your wounds close completely.{0}")
-        elif ev == "shrine":
-            if not yes:
-                f.append("You leave the shrine to its whispering.")
-            elif self.rng.random() < 0.5:
-                p["hp"] = max(p["hp"], max_hp(p))
-                p["turns"] += 1
-                f.append("{G}Warmth floods through you. You are fully healed and "
-                         "feel eager to fight!{0} (+1 fight)")
-            else:
-                loss = max(0, min(p["hp"] - 1, max_hp(p) // 4))
-                p["hp"] -= loss
-                f.append("{R}Something cold drinks from you. You lose %d hit points.{0}" % loss)
-        elif ev == "traveler":
-            if not yes:
-                f.append("You point in a direction. Any direction. The merchant thanks you.")
-            elif p["turns"] < 1:
-                f.append("{r}You're too exhausted to guide anyone.{0}")
-            else:
-                p["turns"] -= 1
-                if self.rng.random() < 0.3:
-                    p["gems"] += 1
-                    f.append("{C}At the village gate the merchant presses a gem into your hand.{0}")
+                    n = -min(p["gold"], -val * lvl)
+                p["gold"] += n
+                note(n, "gold", "gold")
+            elif key == "gold_pct":
+                n = int(p["gold"] * val)
+                p["gold"] += n
+                note(n, "gold", "gold")
+            elif key == "gems":
+                n = max(val, -p["gems"])
+                p["gems"] += n
+                note(n, "gem", "gems")
+            elif key == "hp_pct":
+                if val > 0:
+                    n = max(0, min(mhp - p["hp"], int(math.ceil(mhp * val))))
                 else:
-                    gold = 25 * p["level"]
-                    p["gold"] += gold
-                    f.append("{Y}The grateful merchant rewards you with %d gold.{0}" % gold)
-        f.append("")
+                    n = -max(0, min(p["hp"] - 1, int(math.ceil(mhp * -val))))
+                p["hp"] += n
+                note(n, "HP", "HP")
+            elif key == "turns":
+                n = max(val, -p["turns"])
+                p["turns"] += n
+                note(n, "forest fight", "forest fights")
+            elif key == "charm":
+                n = max(val, -p["charm"])
+                p["charm"] += n
+                note(n, "charm", "charm")
+            elif key == "xp":
+                n = val * xp_for_kill(lvl)
+                p["xp"] += n
+                note(n, "experience", "experience")
+            elif key == "max_hp":
+                p["bonus_hp"] += val
+                p["hp"] += val
+                note(val, "max HP", "max HP")
+            elif key == "atk":
+                p["bonus_atk"] += val
+                note(val, "attack", "attack")
+            elif key == "def":
+                p["bonus_def"] += val
+                note(val, "defence", "defence")
+            elif key == "skill":
+                n = max(0, min(val, skill_max(p) - p["skill_uses"]))
+                p["skill_uses"] += n
+                skill = D.SPECIALTIES[p["specialty"]]["skill"]
+                note(n, "%s use" % skill, "%s uses" % skill)
+            elif key == "news":
+                self.news(self._fill(val, p))
+        return effects.get("fight")
+
+    def _event_fight(self, p, spec):
+        if spec.get("mirror"):
+            foe = {
+                "name": spec["name"], "weapon": spec["weapon"], "level": p["level"],
+                "hp": max(5, max_hp(p) * 4 // 5), "atk": float(attack(p)),
+                "def": float(defence(p)), "gold": 22 * p["level"],
+                "xp": xp_for_kill(p["level"]),
+            }
+        else:
+            foe = self.make_creature(max(1, p["level"] + spec.get("level", 0)))
+            foe.update(name=spec["name"], weapon=spec["weapon"])
+        reward = spec.get("reward", 1.0)
+        foe["gold"] = int(foe["gold"] * reward)
+        foe["xp"] = int(foe["xp"] * reward)
+        self.start_fight(p, "forest", foe, back="forest")
 
     # --------------------------------------------------------------- combat
 
