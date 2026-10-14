@@ -2,7 +2,7 @@ name: Legend of Darkness
 version: "0.1.0"
 slug: legend_of_darkness
 description: A multiplayer fantasy text adventure in the style of the classic BBS door games.
-url: https://github.com/OWNER/legend-of-darkness
+url: https://github.com/Arbitrary8481/lod
 arch:
   - aarch64
   - amd64
