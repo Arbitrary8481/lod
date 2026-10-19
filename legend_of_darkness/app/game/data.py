@@ -6,6 +6,10 @@ VILLAGE = "Gloamhaven"
 INN = "The Gloaming Lantern"
 INNKEEPER = "Mordin"
 BARD = "Seraphine"
+DEALER = "One-Eyed Hesk"
+CARD_RANKS = ["Ace", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten",
+              "Jack", "Queen", "King"]
+CARD_SUITS = ["Skulls", "Crowns", "Daggers", "Moons"]
 HEALER = "Old Ysolde"
 SMITH = "Garrick Ironhand"
 ARMORER = "Bettany Steelweave"

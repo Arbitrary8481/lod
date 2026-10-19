@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0
+
+- High/Low card game with One-Eyed Hesk at The Gloaming Lantern. Bet, then guess whether
+  the next card is higher or lower; each right guess multiplies your pot by the odds.
+  Cash out any time. Bets are limited to 100 gold per level, pots to 20x the stake, and
+  any unfinished pot is paid back at the new day. Big winning streaks make the Daily News.
+
 ## 0.2.1
 
 - Encounters no longer waste a reward on healing when you're already at full health:

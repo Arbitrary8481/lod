@@ -21,7 +21,7 @@ descend into the cavern to slay **the Shadow Wyrm**.
 - **Fourteen training masters** to defeat before you can face the Shadow Wyrm.
 - **Wyrm kills** reset you to level 1 with a permanent gift and a new title.
 - **Village**: weapon and armour shops with trade-ins, healer, bank with interest,
-  and an inn with ale, gossip, a flirtatious bard and safe rooms.
+  and an inn with ale, gossip, a flirtatious bard, a High/Low card game and safe rooms.
 - **Multiplayer**: ambush other players, a shared daily news feed, a hall of fame,
   and chat in the village square and the inn.
 - **Death** sends you to the Shades, where you can torment souls to earn an early return.

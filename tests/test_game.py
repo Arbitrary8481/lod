@@ -315,6 +315,116 @@ class GameTest(unittest.TestCase):
         self.assertNotIn("lady", seen)
         self.assertNotIn("hatchling", seen)
 
+    # ---------------------------------------------------------- high/low
+
+    def deal(self, *cards):
+        """Make the next card draws come out as `cards`."""
+        seq = iter(cards)
+        self.game.rng.randint = lambda a, b: next(seq)
+
+    def sit_at_cards(self, gold=1000):
+        self.make()
+        self.edit(gold=gold, level=2)
+        self.game.act("u1", "goto:inn")
+        self.assertIn("goto:cards", self.p()["allowed"])
+        self.game.act("u1", "goto:cards")
+
+    def test_cards_win_streak_and_cash_out(self):
+        self.sit_at_cards()
+        self.deal(5, 9, 3)
+        self.game.act("u1", "cards.bet:25")  # 25 x level 2 = 50
+        self.assertEqual(self.p()["gold"], 950)
+        self.assertEqual(self.p()["cards"]["card"], 5)
+        self.game.act("u1", "cards.guess:high")  # 9 > 5, pays 0.92 / (8/13)
+        pot = int(50 * round(0.92 / (8 / 13), 2))
+        self.assertEqual(self.p()["cards"]["pot"], pot)
+        self.game.act("u1", "cards.guess:low")  # 3 < 9, pays 0.92 / (8/13)
+        pot = int(pot * round(0.92 / (8 / 13), 2))
+        self.assertEqual(self.p()["cards"]["streak"], 2)
+        screen = self.game.act("u1", "cards.cash")
+        self.assertEqual(self.p()["gold"], 950 + pot)
+        self.assertIsNone(self.p()["cards"])
+        self.assertTrue(any("scoop up %d gold" % pot in line for line in screen["text"]))
+
+    def test_cards_loss_and_tie_lose_the_pot(self):
+        self.sit_at_cards()
+        self.deal(7, 4)
+        self.game.act("u1", "cards.bet:10")
+        self.game.act("u1", "cards.guess:high")
+        self.assertEqual((self.p()["gold"], self.p()["cards"]), (980, None))
+        self.deal(7, 7)
+        self.game.act("u1", "cards.bet:10")
+        screen = self.game.act("u1", "cards.guess:low")
+        self.assertEqual((self.p()["gold"], self.p()["cards"]), (960, None))
+        self.assertTrue(any("A match!" in line for line in screen["text"]))
+
+    def test_cards_impossible_guesses_are_hidden(self):
+        self.sit_at_cards()
+        self.deal(13)
+        self.game.act("u1", "cards.bet:10")
+        allowed = self.p()["allowed"]
+        self.assertNotIn("cards.guess:high", allowed)
+        self.assertIn("cards.guess:low", allowed)
+        self.assertNotIn("goto:inn", allowed)  # must finish the hand first
+        self.edit(cards=dict(self.p()["cards"], card=1))
+        self.game.view("u1")
+        self.assertNotIn("cards.guess:low", self.p()["allowed"])
+
+    def test_cards_bet_limits(self):
+        self.sit_at_cards(gold=30)
+        screen = self.game.act("u1", "cards.bet:custom", "500")
+        self.assertIn("House limit", " ".join(screen["text"]))
+        screen = self.game.act("u1", "cards.bet:25")  # 50 gold, only 30 on hand
+        self.assertIn("kind of coin", " ".join(screen["text"]))
+        self.game.act("u1", "cards.bet:custom", "abc")
+        self.game.act("u1", "cards.bet:custom", "-5")
+        self.assertEqual((self.p()["gold"], self.p().get("cards")), (30, None))
+        self.game.act("u1", "cards.bet:custom", "30")
+        self.assertEqual((self.p()["gold"], self.p()["cards"]["pot"]), (0, 30))
+
+    def test_cards_pot_is_capped_and_paid_out(self):
+        self.sit_at_cards()
+        self.deal(2, 1, 2, 1)  # long shot (x11.96), safe bet, long shot again
+        self.game.act("u1", "cards.bet:10")  # 20 gold
+        self.game.act("u1", "cards.guess:low")
+        self.assertEqual(self.p()["cards"]["pot"], 239)
+        self.game.act("u1", "cards.guess:high")
+        screen = self.game.act("u1", "cards.guess:low")
+        self.assertIn("house limit", " ".join(screen["text"]))
+        p = self.p()
+        self.assertIsNone(p["cards"])
+        self.assertEqual(p["gold"], 980 + 20 * 20)
+
+    def test_cards_new_day_refunds_pot(self):
+        self.sit_at_cards()
+        self.deal(6)
+        self.game.act("u1", "cards.bet:10")
+        self.next_day()
+        self.game.rng = random.Random(1)
+        self.game.view("u1")
+        p = self.p()
+        self.assertIsNone(p["cards"])
+        self.assertEqual(p["gold"], 1000)
+        self.assertEqual(p["loc"], "village")
+
+    def test_cards_favour_the_house(self):
+        self.sit_at_cards(gold=10 ** 9)
+        self.edit(level=15)
+        start = self.p()["gold"]
+        rng = random.Random(7)
+        for _ in range(3000):
+            self.game.act("u1", "cards.bet:10")
+            for _ in range(rng.randint(1, 4)):
+                if not self.p()["cards"]:
+                    break
+                card = self.p()["cards"]["card"]
+                self.game.act("u1", "cards.guess:" + ("high" if card <= 7 else "low"))
+            if self.p()["cards"]:
+                self.game.act("u1", "cards.cash")
+        wagered = 3000 * 150
+        self.assertLess(self.p()["gold"], start)
+        self.assertGreater(self.p()["gold"], start - wagered * 0.4)
+
     def test_multiple_days_per_real_day(self):
         game = Game(Store(":memory:"), {"days_per_day": 4}, clock=lambda: self.now)
         self.assertEqual(game.today(), "2026-10-14 #3")

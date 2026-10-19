@@ -192,7 +192,12 @@ class Game:
         p["room"] = False
         p["fight"] = None
         p["event"] = None
-        if p["loc"] in ("fight", "event", "shades", "pvp"):
+        if p.get("cards"):
+            p["gold"] += p["cards"]["pot"]
+            f.append("{y}%s pushes your unfinished pot of %d gold back across the table.{0}"
+                     % (D.DEALER, p["cards"]["pot"]))
+            p["cards"] = None
+        if p["loc"] in ("fight", "event", "shades", "pvp", "cards"):
             p["loc"] = "village"
         f.append("You have {G}%d{0} forest fights today." % p["turns"])
         f.append("")
@@ -223,7 +228,7 @@ class Game:
             "village": D.VILLAGE, "forest": "The Duskwood", "fight": "Battle!",
             "event": "Something Stirs", "weapons": "%s's Forge" % D.SMITH,
             "armor": "%s's Armoury" % D.ARMORER, "healer": "%s's Hut" % D.HEALER,
-            "inn": D.INN, "bank": "Coyne & Daughters Bank", "training": "Training Grounds",
+            "inn": D.INN, "cards": "High/Low", "bank": "Coyne & Daughters Bank", "training": "Training Grounds",
             "fame": "Hall of Fame", "news": "Daily News", "pvp": "The Fields",
             "shades": "The Shades", "dk": "Victory Over the Wyrm",
         }.get(p["loc"], D.VILLAGE)
@@ -925,6 +930,7 @@ class Game:
         s.add("Buy an ale (%d gold)" % (5 * p["level"]), "inn.ale", "A")
         s.add("Listen to gossip", "inn.gossip", "G")
         s.add("Flirt with %s" % D.BARD, "inn.flirt", "F")
+        s.add("Play High/Low with %s" % D.DEALER, "goto:cards", "H")
         s.add("Speak", "inn.say", "K", prompt="Say something to the room:")
         s.section("Upstairs")
         if p["room"]:
@@ -983,6 +989,142 @@ class Game:
         p["gold"] -= cost
         p["room"] = True
         p["flash"].append("{G}You pay for a room. Nobody will find you there tonight.{0}")
+
+    # ---------------------------------------------------------------- cards
+
+    CARD_EDGE = 0.92  # each guess pays 92% of fair odds
+    CARD_POT_CAP = 20  # a pot never grows past 20x the stake
+
+    def _card_name(self, value):
+        return "%s of %s" % (D.CARD_RANKS[value - 1], self.rng.choice(D.CARD_SUITS))
+
+    def _card_odds(self, card, guess):
+        """Chance the next card is strictly higher/lower. Equal cards lose."""
+        wins = 13 - card if guess == "high" else card - 1
+        return wins / 13.0
+
+    def _card_multiplier(self, card, guess):
+        return round(self.CARD_EDGE / self._card_odds(card, guess), 2)
+
+    def _card_max_bet(self, p):
+        return 100 * p["level"]
+
+    def view_cards(self, p, s):
+        game = p.get("cards")
+        if not game:
+            s.say(
+                "{W}%s{0} shuffles a greasy deck in a corner booth. \"High or low, friend. "
+                "I turn a card, you guess if the next is higher or lower. Guess right and your "
+                "pot grows. Cash out whenever you like... or push your luck.\"" % D.DEALER,
+                "",
+                "{w}Aces are low, Kings are high. A matching card goes to the house. "
+                "The longer the odds, the bigger the payout. No pot grows past %d times "
+                "its stake.{0}" % self.CARD_POT_CAP,
+                "Bets go up to {Y}%d{0} gold at your level. You have {Y}%d{0} gold."
+                % (self._card_max_bet(p), p["gold"]),
+            )
+            s.section("Place a Bet")
+            for key, mult in enumerate((10, 25, 50, 100), 1):
+                amount = mult * p["level"]
+                s.add("Bet %d gold" % amount, "cards.bet:%d" % mult, str(key))
+            s.add("Name your stake", "cards.bet:custom", "N",
+                  prompt="How much gold will you stake?")
+            s.section("Leave")
+            s.add("Back to the bar", "goto:inn", "B")
+            return
+        card = game["card"]
+        s.say(
+            "{W}%s{0} turns over the {Y}%s{0}." % (D.DEALER, game["name"]),
+            "",
+            "Pot: {Y}%d{0} gold (staked %d)%s" % (
+                game["pot"], game["bet"],
+                "   Streak: {G}%d{0}" % game["streak"] if game["streak"] else ""),
+        )
+        s.section("Your Guess")
+        if card < 13:
+            s.add("Higher (pays x%.2f)" % self._card_multiplier(card, "high"),
+                  "cards.guess:high", "H")
+        if card > 1:
+            s.add("Lower (pays x%.2f)" % self._card_multiplier(card, "low"),
+                  "cards.guess:low", "L")
+        s.section("Walk Away")
+        s.add("Cash out %d gold" % game["pot"], "cards.cash", "C")
+
+    def do_cards_bet(self, p, arg, value):
+        if p.get("cards"):
+            return
+        if arg == "custom":
+            try:
+                amount = int(str(value).strip())
+            except (TypeError, ValueError):
+                p["flash"].append("{r}%s squints. \"That's not a number.\"{0}" % D.DEALER)
+                return
+        else:
+            try:
+                amount = int(arg) * p["level"]
+            except ValueError:
+                return
+        if amount < 1:
+            p["flash"].append("{r}\"Stake something, at least.\"{0}")
+            return
+        if amount > self._card_max_bet(p):
+            p["flash"].append("{r}\"House limit's %d at your level.\"{0}" % self._card_max_bet(p))
+            return
+        if amount > p["gold"]:
+            p["flash"].append("{r}\"You don't have that kind of coin.\"{0}")
+            return
+        p["gold"] -= amount
+        card = self.rng.randint(1, 13)
+        p["cards"] = {"bet": amount, "pot": amount, "card": card, "name": self._card_name(card),
+                      "streak": 0}
+
+    def do_cards_guess(self, p, arg, value):
+        game = p.get("cards")
+        if not game or arg not in ("high", "low"):
+            return
+        old = game["card"]
+        if self._card_odds(old, arg) <= 0:
+            return
+        mult = self._card_multiplier(old, arg)
+        new = self.rng.randint(1, 13)
+        name = self._card_name(new)
+        won = new > old if arg == "high" else new < old
+        p["flash"].append("You call {W}%s{0}. The next card is the {Y}%s{0}."
+                          % ("higher" if arg == "high" else "lower", name))
+        if not won:
+            p["flash"].extend([
+                "{r}%s%s sweeps your %d gold into the house pile.{0}" % (
+                    "A match! " if new == old else "", D.DEALER, game["pot"]),
+                "",
+            ])
+            p["cards"] = None
+            return
+        cap = game["bet"] * self.CARD_POT_CAP
+        game["pot"] = min(cap, max(game["pot"] + 1, int(game["pot"] * mult)))
+        game["streak"] += 1
+        game["card"] = new
+        game["name"] = name
+        if game["pot"] >= cap:
+            p["flash"].append("{Y}You've broken the house limit! %s grumbles and pays out.{0}"
+                              % D.DEALER)
+            return self.do_cards_cash(p, "", None)
+        p["flash"].extend(["{G}Right! Your pot grows to %d gold.{0}" % game["pot"], ""])
+
+    def do_cards_cash(self, p, arg, value):
+        game = p.get("cards")
+        if not game:
+            return
+        p["gold"] += game["pot"]
+        p["cards"] = None
+        profit = game["pot"] - game["bet"]
+        p["flash"].extend([
+            "{Y}You scoop up %d gold%s.{0}" % (
+                game["pot"], " (%+d)" % profit if profit else ""),
+            "",
+        ])
+        if game["streak"] >= 5 and profit >= 500:
+            self.news("{Y}%s{0} won %d gold at High/Low in %s after a streak of %d!"
+                      % (p["name"], game["pot"], D.INN, game["streak"]))
 
     # ------------------------------------------------------------------ bank
 
