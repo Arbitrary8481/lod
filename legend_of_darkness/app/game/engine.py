@@ -448,8 +448,19 @@ class Game:
 
     # --------------------------------------------------------------- events
 
+    def _heal_only(self, effects):
+        return effects.get("hp_pct", 0) > 0 and set(effects) <= {"hp_pct", "news"}
+
+    def _useful(self, p, outcomes):
+        """Outcomes worth rolling: healing is no reward when already at full health."""
+        if p["hp"] < max_hp(p):
+            return outcomes
+        return [o for o in outcomes if not self._heal_only(o[1])]
+
     def forest_event(self, p):
-        pool = [(k, e) for k, e in EVENTS.items() if p["level"] >= e.get("min_level", 1)]
+        pool = [(k, e) for k, e in EVENTS.items()
+                if p["level"] >= e.get("min_level", 1)
+                and ("choices" in e or self._useful(p, e["outcomes"]))]
         key, ev = self._weighted(pool, lambda kv: kv[1]["weight"])
         p["loc"] = "forest"
         if "outcomes" in ev:
@@ -479,7 +490,8 @@ class Game:
         s.say(*[self._fill(line, p) for line in ev["intro"]])
         s.section("What Do You Do?")
         for i, choice in enumerate(ev["choices"]):
-            s.add(self._fill(choice["label"], p), "event.choose:%d" % i)
+            if self._useful(p, choice["outcomes"]):
+                s.add(self._fill(choice["label"], p), "event.choose:%d" % i)
 
     def do_event_choose(self, p, arg, value):
         ev = EVENTS.get(p["event"] or "")
@@ -503,7 +515,8 @@ class Game:
         self._resolve(p, choice["outcomes"], price)
 
     def _resolve(self, p, outcomes, paid=None):
-        _, effects, text = self._weighted(outcomes, lambda o: o[0])
+        _, effects, text = self._weighted(self._useful(p, outcomes) or outcomes,
+                                          lambda o: o[0])
         parts = ["-%d %s" % (v, k if k != "turns" else "forest fights")
                  for k, v in (paid or {}).items() if v]
         p["flash"].append(self._fill(text, p))

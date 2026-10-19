@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1
+
+- Encounters no longer waste a reward on healing when you're already at full health:
+  healing-only outcomes are skipped, the healing spring doesn't appear, and the caravan
+  doesn't offer its healing draught.
+
 ## 0.2.0
 
 - 26 forest encounters (up from 8), many with choices and several possible outcomes:

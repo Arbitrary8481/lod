@@ -213,7 +213,7 @@ class GameTest(unittest.TestCase):
                 for key, ev in EVENTS.items():
                     for i in range(len(ev.get("choices", [{}]))):
                         for _ in range(8):
-                            self.edit(level=level, hp=10 * level, turns=5, skill_uses=0,
+                            self.edit(level=level, hp=5 * level, turns=5, skill_uses=0,
                                       gold=10000 if rich else 0, gems=5 if rich else 0,
                                       alive=True, fight=None, event=None, loc="forest")
                             if "outcomes" in ev:
@@ -259,6 +259,50 @@ class GameTest(unittest.TestCase):
         self.assertEqual(p["loc"], "fight")
         self.assertEqual(p["fight"]["name"], "Your Shadow")
         self.assertEqual(p["fight"]["xp"], 3 * xp_for_kill(5))
+
+    def test_full_health_never_rewards_healing(self):
+        self.make()
+        for _ in range(500):
+            self.edit(level=10, hp=100, bonus_hp=0, gold=5000, gems=5, loc="forest", event=None,
+                      fight=None)
+            p = self.p()
+            self.game.forest_event(p)
+            self.assertNotIn("Drinking", " ".join(p["flash"]), "healing spring at full HP")
+            if p["loc"] == "event":
+                self.game.store.save_player(p)
+                screen = self.game.view("u1")
+                labels = [i["label"] for sec in screen["nav"] for i in sec["items"]]
+                self.assertNotIn("healing draught", " ".join(labels))
+                for action in self.p()["allowed"]:
+                    self.edit(hp=100, bonus_hp=0, loc="event", event=p["event"], fight=None)
+                    self.game.view("u1")
+                    screen = self.game.act("u1", action)
+                    self.assertNotRegex(" ".join(screen["text"]), r"\+\d+ HP\b", p["event"])
+
+    def test_fairy_heals_only_when_hurt(self):
+        self.make()
+        outcomes = set()
+        for _ in range(200):
+            self.edit(hp=10, bonus_hp=0, gems=1, loc="event", event="fairy")
+            self.game.view("u1")
+            text = " ".join(self.game.act("u1", "event.choose:0")["text"])
+            outcomes.add("close completely" in text)
+        self.assertEqual(outcomes, {False})
+        healed = False
+        for _ in range(200):
+            self.edit(hp=3, bonus_hp=0, gems=1, loc="event", event="fairy")
+            self.game.view("u1")
+            healed |= "close completely" in " ".join(self.game.act("u1", "event.choose:0")["text"])
+        self.assertTrue(healed)
+
+    def test_healing_draught_offered_only_when_hurt(self):
+        self.make()
+        self.edit(hp=10, loc="event", event="caravan")
+        self.game.view("u1")
+        self.assertNotIn("event.choose:0", self.p()["allowed"])
+        self.edit(hp=4, loc="event", event="caravan")
+        self.game.view("u1")
+        self.assertIn("event.choose:0", self.p()["allowed"])
 
     def test_high_level_events_are_gated(self):
         self.make()
