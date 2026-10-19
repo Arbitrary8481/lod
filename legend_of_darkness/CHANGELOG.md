@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.1
+
+- High/Low now deals each hand from a real shuffled 52-card deck instead of rolling every
+  card fresh, so matches are rarer (about 6% of guesses instead of 7.7%) and no card
+  repeats within a hand. Payouts are worked out from the cards actually left in the deck.
+
 ## 0.3.0
 
 - High/Low card game with One-Eyed Hesk at The Gloaming Lantern. Bet, then guess whether

@@ -317,10 +317,17 @@ class GameTest(unittest.TestCase):
 
     # ---------------------------------------------------------- high/low
 
-    def deal(self, *cards):
-        """Make the next card draws come out as `cards`."""
-        seq = iter(cards)
-        self.game.rng.randint = lambda a, b: next(seq)
+    def deal(self, *ranks):
+        """Stack the next shuffled deck so cards come out with these ranks, in order."""
+        def stack(deck):
+            rest = list(deck)
+            top = []
+            for rank in ranks:
+                card = next(c for c in rest if c // 4 + 1 == rank)
+                rest.remove(card)
+                top.append(card)
+            deck[:] = rest + top[::-1]  # cards are drawn from the end
+        self.game.rng.shuffle = stack
 
     def sit_at_cards(self, gold=1000):
         self.make()
@@ -335,11 +342,13 @@ class GameTest(unittest.TestCase):
         self.game.act("u1", "cards.bet:25")  # 25 x level 2 = 50
         self.assertEqual(self.p()["gold"], 950)
         self.assertEqual(self.p()["cards"]["card"], 5)
-        self.game.act("u1", "cards.guess:high")  # 9 > 5, pays 0.92 / (8/13)
-        pot = int(50 * round(0.92 / (8 / 13), 2))
+        # 51 cards left, 32 of them (Six-King) beat a Five
+        self.game.act("u1", "cards.guess:high")
+        pot = int(50 * round(0.92 * 51 / 32, 2))
         self.assertEqual(self.p()["cards"]["pot"], pot)
-        self.game.act("u1", "cards.guess:low")  # 3 < 9, pays 0.92 / (8/13)
-        pot = int(pot * round(0.92 / (8 / 13), 2))
+        # 50 cards left, 31 of them (Ace-Eight minus the Five) are under a Nine
+        self.game.act("u1", "cards.guess:low")
+        pot = int(pot * round(0.92 * 50 / 31, 2))
         self.assertEqual(self.p()["cards"]["streak"], 2)
         screen = self.game.act("u1", "cards.cash")
         self.assertEqual(self.p()["gold"], 950 + pot)
@@ -384,10 +393,10 @@ class GameTest(unittest.TestCase):
 
     def test_cards_pot_is_capped_and_paid_out(self):
         self.sit_at_cards()
-        self.deal(2, 1, 2, 1)  # long shot (x11.96), safe bet, long shot again
+        self.deal(2, 1, 2, 1)  # long shot, safe bet, long shot again
         self.game.act("u1", "cards.bet:10")  # 20 gold
-        self.game.act("u1", "cards.guess:low")
-        self.assertEqual(self.p()["cards"]["pot"], 239)
+        self.game.act("u1", "cards.guess:low")  # 4 Aces in 51 cards
+        self.assertEqual(self.p()["cards"]["pot"], int(20 * round(0.92 * 51 / 4, 2)))
         self.game.act("u1", "cards.guess:high")
         screen = self.game.act("u1", "cards.guess:low")
         self.assertIn("house limit", " ".join(screen["text"]))
@@ -406,6 +415,40 @@ class GameTest(unittest.TestCase):
         self.assertIsNone(p["cards"])
         self.assertEqual(p["gold"], 1000)
         self.assertEqual(p["loc"], "village")
+
+    def test_cards_come_from_a_real_deck(self):
+        self.sit_at_cards(gold=10 ** 9)
+        self.edit(level=15)
+        self.game.rng = random.Random(3)
+        guesses = matches = 0
+        for _ in range(4000):
+            self.game.act("u1", "cards.bet:10")
+            seen = [self.p()["cards"]["name"]]
+            while self.p()["cards"]:
+                card = self.p()["cards"]["card"]
+                text = " ".join(self.game.act(
+                    "u1", "cards.guess:" + ("high" if card <= 7 else "low"))["text"])
+                guesses += 1
+                matches += "A match!" in text
+                game = self.p()["cards"]
+                if game:
+                    self.assertNotIn(game["name"], seen)  # no card dealt twice in a hand
+                    seen.append(game["name"])
+                    if len(seen) >= 4:
+                        self.game.act("u1", "cards.cash")
+        # A real deck matches 3/51 (5.9%) at most, versus 1/13 (7.7%) for endless rolls.
+        self.assertLess(matches / guesses, 0.068)
+
+    def test_cards_hand_from_before_decks_still_works(self):
+        self.sit_at_cards()
+        self.edit(cards={"bet": 20, "pot": 20, "card": 7, "name": "Seven of Moons",
+                         "streak": 0}, gold=980)
+        self.game.view("u1")
+        self.assertIn("cards.guess:high", self.p()["allowed"])
+        self.game.act("u1", "cards.guess:high")
+        game = self.p()["cards"]
+        if game:
+            self.assertEqual(len(game["deck"]), 50)
 
     def test_cards_favour_the_house(self):
         self.sit_at_cards(gold=10 ** 9)

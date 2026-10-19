@@ -995,16 +995,36 @@ class Game:
     CARD_EDGE = 0.92  # each guess pays 92% of fair odds
     CARD_POT_CAP = 20  # a pot never grows past 20x the stake
 
-    def _card_name(self, value):
-        return "%s of %s" % (D.CARD_RANKS[value - 1], self.rng.choice(D.CARD_SUITS))
+    # Each hand is dealt from its own shuffled 52-card deck. A card is an int 0-51:
+    # rank = card // 4 + 1 (Ace=1 .. King=13), suit = card % 4.
 
-    def _card_odds(self, card, guess):
-        """Chance the next card is strictly higher/lower. Equal cards lose."""
-        wins = 13 - card if guess == "high" else card - 1
-        return wins / 13.0
+    def _card_name(self, card):
+        return "%s of %s" % (D.CARD_RANKS[card // 4], D.CARD_SUITS[card % 4])
 
-    def _card_multiplier(self, card, guess):
-        return round(self.CARD_EDGE / self._card_odds(card, guess), 2)
+    def _card_deck(self, game):
+        if "deck" not in game:  # hand started before decks existed
+            deck = list(range(52))
+            deck.remove((game["card"] - 1) * 4)
+            self.rng.shuffle(deck)
+            game["deck"] = deck
+        return game["deck"]
+
+    def _card_draw(self, game):
+        card = self._card_deck(game).pop()
+        game["card"] = card // 4 + 1
+        game["name"] = self._card_name(card)
+
+    def _card_odds(self, game, guess):
+        """Chance the next card from the deck is strictly higher/lower. Equal cards lose."""
+        deck = self._card_deck(game)
+        if not deck:
+            return 0.0
+        rank = game["card"]
+        wins = sum(1 for c in deck if (c // 4 + 1 > rank if guess == "high" else c // 4 + 1 < rank))
+        return wins / float(len(deck))
+
+    def _card_multiplier(self, game, guess):
+        return round(self.CARD_EDGE / self._card_odds(game, guess), 2)
 
     def _card_max_bet(self, p):
         return 100 * p["level"]
@@ -1017,7 +1037,8 @@ class Game:
                 "I turn a card, you guess if the next is higher or lower. Guess right and your "
                 "pot grows. Cash out whenever you like... or push your luck.\"" % D.DEALER,
                 "",
-                "{w}Aces are low, Kings are high. A matching card goes to the house. "
+                "{w}Each hand uses a fresh deck. Aces are low, Kings are high. A matching "
+                "card goes to the house. "
                 "The longer the odds, the bigger the payout. No pot grows past %d times "
                 "its stake.{0}" % self.CARD_POT_CAP,
                 "Bets go up to {Y}%d{0} gold at your level. You have {Y}%d{0} gold."
@@ -1032,7 +1053,6 @@ class Game:
             s.section("Leave")
             s.add("Back to the bar", "goto:inn", "B")
             return
-        card = game["card"]
         s.say(
             "{W}%s{0} turns over the {Y}%s{0}." % (D.DEALER, game["name"]),
             "",
@@ -1041,11 +1061,11 @@ class Game:
                 "   Streak: {G}%d{0}" % game["streak"] if game["streak"] else ""),
         )
         s.section("Your Guess")
-        if card < 13:
-            s.add("Higher (pays x%.2f)" % self._card_multiplier(card, "high"),
+        if self._card_odds(game, "high") > 0:
+            s.add("Higher (pays x%.2f)" % self._card_multiplier(game, "high"),
                   "cards.guess:high", "H")
-        if card > 1:
-            s.add("Lower (pays x%.2f)" % self._card_multiplier(card, "low"),
+        if self._card_odds(game, "low") > 0:
+            s.add("Lower (pays x%.2f)" % self._card_multiplier(game, "low"),
                   "cards.guess:low", "L")
         s.section("Walk Away")
         s.add("Cash out %d gold" % game["pot"], "cards.cash", "C")
@@ -1074,23 +1094,24 @@ class Game:
             p["flash"].append("{r}\"You don't have that kind of coin.\"{0}")
             return
         p["gold"] -= amount
-        card = self.rng.randint(1, 13)
-        p["cards"] = {"bet": amount, "pot": amount, "card": card, "name": self._card_name(card),
-                      "streak": 0}
+        deck = list(range(52))
+        self.rng.shuffle(deck)
+        p["cards"] = {"bet": amount, "pot": amount, "streak": 0, "deck": deck}
+        self._card_draw(p["cards"])
 
     def do_cards_guess(self, p, arg, value):
         game = p.get("cards")
         if not game or arg not in ("high", "low"):
             return
         old = game["card"]
-        if self._card_odds(old, arg) <= 0:
+        if self._card_odds(game, arg) <= 0:
             return
-        mult = self._card_multiplier(old, arg)
-        new = self.rng.randint(1, 13)
-        name = self._card_name(new)
+        mult = self._card_multiplier(game, arg)
+        self._card_draw(game)
+        new = game["card"]
         won = new > old if arg == "high" else new < old
         p["flash"].append("You call {W}%s{0}. The next card is the {Y}%s{0}."
-                          % ("higher" if arg == "high" else "lower", name))
+                          % ("higher" if arg == "high" else "lower", game["name"]))
         if not won:
             p["flash"].extend([
                 "{r}%s%s sweeps your %d gold into the house pile.{0}" % (
@@ -1102,10 +1123,12 @@ class Game:
         cap = game["bet"] * self.CARD_POT_CAP
         game["pot"] = min(cap, max(game["pot"] + 1, int(game["pot"] * mult)))
         game["streak"] += 1
-        game["card"] = new
-        game["name"] = name
         if game["pot"] >= cap:
             p["flash"].append("{Y}You've broken the house limit! %s grumbles and pays out.{0}"
+                              % D.DEALER)
+            return self.do_cards_cash(p, "", None)
+        if not (self._card_odds(game, "high") or self._card_odds(game, "low")):
+            p["flash"].append("{Y}%s has run out of cards to beat you with, and pays out.{0}"
                               % D.DEALER)
             return self.do_cards_cash(p, "", None)
         p["flash"].extend(["{G}Right! Your pot grows to %d gold.{0}" % game["pot"], ""])
