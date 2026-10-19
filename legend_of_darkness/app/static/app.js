@@ -5,6 +5,7 @@
   // Relative URLs keep Home Assistant's ingress path prefix intact.
   const query = window.location.search;
   let hotkeys = {};
+  let links = [];
   let busy = false;
 
   function escapeHtml(s) {
@@ -27,7 +28,11 @@
         html += part;
       }
     }
-    return open ? html + "</span>" : html;
+    if (open) html += "</span>";
+    // [[n]]text[[/]] marks inline clickable text (see Screen.link on the server).
+    return html
+      .replace(/\[\[(\d+)\]\]/g, '<span class="hot" data-link="$1">')
+      .replace(/\[\[\/\]\]/g, "</span>");
   }
 
   function renderText(lines) {
@@ -83,6 +88,7 @@
   }
 
   function render(screen) {
+    links = screen.links || [];
     $("title").textContent = screen.title;
     document.title = `${screen.title} - Legend of Darkness`;
     renderText(screen.text);
@@ -115,11 +121,12 @@
     }
   }
 
-  function ask(label) {
+  function ask(label, secret) {
     return new Promise((resolve) => {
       const dlg = $("prompt");
       const input = $("prompt-input");
       $("prompt-label").textContent = label;
+      input.type = secret ? "password" : "text";
       input.value = "";
       const done = (value) => {
         dlg.close();
@@ -139,11 +146,17 @@
     if (busy) return;
     let value = null;
     if (item.prompt) {
-      value = await ask(item.prompt);
+      value = await ask(item.prompt, item.secret);
       if (value === null || value.trim() === "") return;
     }
     call("api/action", { action: item.a, value });
   }
+
+  $("text").addEventListener("click", (e) => {
+    const hot = e.target.closest(".hot");
+    const item = hot && links[Number(hot.dataset.link)];
+    if (item) choose(item);
+  });
 
   document.addEventListener("keydown", (e) => {
     if (e.ctrlKey || e.metaKey || e.altKey || $("prompt").open) return;

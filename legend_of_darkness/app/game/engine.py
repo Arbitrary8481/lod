@@ -7,6 +7,7 @@ from datetime import datetime
 from string import Template
 
 from . import data as D
+from .admin import AdminMixin
 from .events import EVENTS
 
 DEFAULT_OPTIONS = {
@@ -50,7 +51,7 @@ def heal_cost(p, amount):
 
 
 def clean_text(text, limit):
-    text = re.sub(r"[{}<>\x00-\x1f]", "", str(text or "")).strip()
+    text = re.sub(r"[{}<>\[\]\x00-\x1f]", "", str(text or "")).strip()
     return text[:limit]
 
 
@@ -59,6 +60,7 @@ class Screen:
         self.title = title
         self.text = []
         self.nav = []
+        self.links = []
         self._keys = set()
 
     def say(self, *lines):
@@ -87,15 +89,32 @@ class Screen:
                 return ch
         return ""
 
+    def link(self, text, action, prompt=None, secret=False):
+        """Inline clickable text. Returns markup to embed in a line of story text."""
+        item = {"a": action}
+        if prompt:
+            item["prompt"] = prompt
+        if secret:
+            item["secret"] = True
+        self.links.append(item)
+        return "[[%d]]%s[[/]]" % (len(self.links) - 1, text)
+
     def actions(self):
-        return [i["a"] for sec in self.nav for i in sec["items"]]
+        return [i["a"] for sec in self.nav for i in sec["items"]] + [i["a"] for i in self.links]
 
 
-class Game:
-    def __init__(self, store, options=None, rng=None, clock=None):
+class Game(AdminMixin):
+    def __init__(self, store, options=None, rng=None, clock=None, admin_hash=None):
         self.store = store
-        self.opt = dict(DEFAULT_OPTIONS)
-        self.opt.update({k: v for k, v in (options or {}).items() if k in DEFAULT_OPTIONS})
+        # base_opt: the app's configuration page. opt: plus control panel overrides.
+        self.base_opt = dict(DEFAULT_OPTIONS)
+        self.base_opt.update({k: v for k, v in (options or {}).items() if k in DEFAULT_OPTIONS})
+        self.opt = dict(self.base_opt)
+        if store is not None:
+            self.opt.update({k: v for k, v in store.get_settings().items()
+                             if k in DEFAULT_OPTIONS})
+        if admin_hash:
+            self.admin_hash = admin_hash
         self.rng = rng or random.Random()
         self.clock = clock or datetime.now
 
@@ -152,6 +171,7 @@ class Game:
             "title": screen.title,
             "text": screen.text,
             "nav": screen.nav,
+            "links": screen.links,
             "stats": self._stats(p),
         }
 
@@ -230,7 +250,7 @@ class Game:
             "armor": "%s's Armoury" % D.ARMORER, "healer": "%s's Hut" % D.HEALER,
             "inn": D.INN, "cards": "High/Low", "bank": "Coyne & Daughters Bank", "training": "Training Grounds",
             "fame": "Hall of Fame", "news": "Daily News", "pvp": "The Fields",
-            "shades": "The Shades", "dk": "Victory Over the Wyrm",
+            "shades": "The Shades", "dk": "Victory Over the Wyrm", "admin": "Control Panel",
         }.get(p["loc"], D.VILLAGE)
         s = Screen(title)
         if p["mail"]:
@@ -353,6 +373,11 @@ class Game:
             "chimney of %s, and the clang of %s's hammer rings across the square."
             % (D.VILLAGE, D.INN, D.SMITH.split()[0]),
             "{w}%s{0}" % self.rng.choice(D.VILLAGE_AMBIENCE),
+            "",
+            "{w}The notice board by the well is dated %s.{0}" % s.link(
+                self.clock().strftime("%A, %d %B %Y").replace(" 0", " "), "admin.login",
+                prompt="The numbers on the date seem to shift. What do you whisper?",
+                secret=True),
             "",
             "{c}Nearby, villagers talk:{0}",
         )

@@ -1,3 +1,4 @@
+import hashlib
 import random
 import sys
 import unittest
@@ -8,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "legend_of_darkness
 
 from game import data as D  # noqa: E402
 from game.engine import Game, max_hp, xp_for_kill, xp_needed  # noqa: E402
+from game.admin import ADMIN_HASH, check_password  # noqa: E402
 from game.events import EVENTS  # noqa: E402
 from game.store import Store  # noqa: E402
 
@@ -467,6 +469,132 @@ class GameTest(unittest.TestCase):
         wagered = 3000 * 150
         self.assertLess(self.p()["gold"], start)
         self.assertGreater(self.p()["gold"], start - wagered * 0.4)
+
+    # ------------------------------------------------------------- admin
+
+    TEST_PASSWORD = "not-the-real-password"
+
+    def admin_game(self):
+        salt = b"0123456789abcdef"
+        digest = hashlib.scrypt(self.TEST_PASSWORD.encode(), salt=salt, n=2 ** 10, r=8, p=1,
+                                dklen=32)
+        spec = "scrypt$1024$8$1$%s$%s" % (salt.hex(), digest.hex())
+        self.game = Game(self.game.store, rng=random.Random(42), clock=lambda: self.now,
+                         admin_hash=spec)
+
+    def login(self, password=None):
+        screen = self.game.view("u1")
+        link = [l for l in screen["links"] if l["a"] == "admin.login"]
+        self.assertTrue(link and link[0]["secret"])
+        return self.game.act("u1", "admin.login", password or self.TEST_PASSWORD)
+
+    def test_shipped_admin_hash_is_a_hash(self):
+        self.assertTrue(ADMIN_HASH.startswith("scrypt$"))
+        self.assertFalse(check_password("", ADMIN_HASH))
+        self.assertFalse(check_password(self.TEST_PASSWORD, ADMIN_HASH))
+
+    def test_date_on_town_square_is_the_hidden_entrance(self):
+        self.admin_game()
+        self.make()
+        screen = self.game.view("u1")
+        date_line = [t for t in screen["text"] if "[[" in t][0]
+        self.assertIn("October 2026", date_line)
+        self.assertNotIn("admin", " ".join(i["a"] for sec in screen["nav"] for i in sec["items"]))
+        self.login()
+        self.assertEqual(self.p()["loc"], "admin")
+
+    def test_admin_wrong_password_and_lockout(self):
+        self.admin_game()
+        self.make()
+        for _ in range(5):
+            screen = self.login("guess")
+            self.assertEqual(self.p()["loc"], "village")
+        self.login()  # right password, but locked out
+        self.assertEqual(self.p()["loc"], "village")
+        self.now += timedelta(minutes=16)
+        self.login()
+        self.assertEqual(self.p()["loc"], "admin")
+
+    def test_admin_actions_need_login(self):
+        self.admin_game()
+        self.make("u1", "Alice")
+        self.make("u2", "Bob")
+        screen = self.game.act("u1", "admin.set:u2:gold", "99999")
+        self.assertIn("can't do that", screen["text"][0])
+        self.assertEqual(self.p("u2")["gold"], 50)
+
+    def test_admin_edits_other_players_and_self(self):
+        self.admin_game()
+        self.make("u1", "Alice")
+        self.make("u2", "Bob")
+        self.login()
+        self.game.act("u1", "admin.pick:u2")
+        self.game.act("u1", "admin.set:u2:gold", "12345")
+        self.game.act("u1", "admin.set:u2:level", "99")  # clamped to 15
+        self.game.act("u1", "admin.set:u2:gems", "lots")  # ignored
+        bob = self.p("u2")
+        self.assertEqual((bob["gold"], bob["level"], bob["gems"]), (12345, 15, 0))
+        self.game.act("u1", "admin.alive:u2")
+        self.assertFalse(self.p("u2")["alive"])
+        self.game.act("u1", "admin.alive:u2")
+        self.assertTrue(self.p("u2")["alive"])
+        self.game.act("u1", "admin.pick:home")
+        self.game.act("u1", "admin.pick:u1")
+        self.game.act("u1", "admin.set:u1:gems", "7")
+        self.assertEqual(self.p("u1")["gems"], 7)
+        self.assertNotIn("admin.delete:u1", self.p("u1")["allowed"])
+
+    def test_admin_delete_needs_name(self):
+        self.admin_game()
+        self.make("u1", "Alice")
+        self.make("u2", "Bob")
+        self.login()
+        self.game.act("u1", "admin.pick:u2")
+        self.game.act("u1", "admin.delete:u2", "bob?")
+        self.assertIsNotNone(self.p("u2"))
+        self.game.act("u1", "admin.delete:u2", "Bob")
+        self.assertIsNone(self.p("u2"))
+        self.assertEqual(self.p("u1")["loc"], "admin")
+
+    def test_admin_settings_persist_and_reset(self):
+        self.admin_game()
+        self.make()
+        self.login()
+        self.game.act("u1", "admin.pick:settings")
+        self.game.act("u1", "admin.opt:forest_turns", "50")
+        self.game.act("u1", "admin.opt:bank_interest", "99")  # clamped to 20
+        self.assertEqual((self.game.opt["forest_turns"], self.game.opt["bank_interest"]),
+                         (50, 20.0))
+        reloaded = Game(self.game.store, clock=lambda: self.now)
+        self.assertEqual(reloaded.opt["forest_turns"], 50)
+        self.game.act("u1", "admin.optreset")
+        self.assertEqual(self.game.opt["forest_turns"], 20)
+        self.assertEqual(Game(self.game.store).opt["forest_turns"], 20)
+
+    def test_admin_session_expires(self):
+        self.admin_game()
+        self.make("u1", "Alice")
+        self.make("u2", "Bob")
+        self.login()
+        self.now += timedelta(minutes=31)
+        self.game.act("u1", "admin.pick:u2")
+        self.game.act("u1", "admin.set:u2:gold", "1")
+        self.assertEqual(self.p("u2")["gold"], 50)
+        self.assertEqual(self.p("u1")["loc"], "village")
+
+    def test_admin_news_and_chatter(self):
+        self.admin_game()
+        self.make()
+        self.game.act("u1", "village.say", "hello [[0]] there")
+        self.assertNotIn("[[", " ".join(self.game.view("u1")["text"]).replace(
+            [t for t in self.game.view("u1")["text"] if "notice board" in t][0], ""))
+        self.login()
+        self.game.act("u1", "admin.news", "Feast tonight!")
+        self.assertIn("Feast tonight!", self.game.store.recent_news(1)[0])
+        self.game.act("u1", "admin.clearchat", "nope")
+        self.assertTrue(self.game.store.chatter("village"))
+        self.game.act("u1", "admin.clearchat", "clear")
+        self.assertFalse(self.game.store.chatter("village"))
 
     def test_multiple_days_per_real_day(self):
         game = Game(Store(":memory:"), {"days_per_day": 4}, clock=lambda: self.now)

@@ -138,6 +138,9 @@ html, body {
 
 .error { color: var(--danger); }
 
+/* inline links look like plain text on purpose */
+.hot { cursor: text; }
+
 dialog {
   background: var(--panel);
   color: var(--ink);

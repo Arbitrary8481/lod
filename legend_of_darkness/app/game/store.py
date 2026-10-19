@@ -24,6 +24,10 @@ class Store:
                 text TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS news_day ON news(day);
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS chatter (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 place TEXT NOT NULL,
@@ -52,6 +56,9 @@ class Store:
             "SELECT id FROM players WHERE name=? AND id<>?", (name, pid)
         ).fetchone()
         return row is not None
+
+    def delete_player(self, pid):
+        self.db.execute("DELETE FROM players WHERE id=?", (pid,))
 
     def all_players(self):
         rows = self.db.execute("SELECT data FROM players WHERE name IS NOT NULL").fetchall()
@@ -82,7 +89,26 @@ class Store:
         ).fetchall()
         return [r["text"] for r in rows]
 
+    # settings ------------------------------------------------------------
+
+    def get_settings(self):
+        rows = self.db.execute("SELECT key, value FROM settings").fetchall()
+        return {r["key"]: json.loads(r["value"]) for r in rows}
+
+    def set_setting(self, key, value):
+        self.db.execute(
+            "INSERT INTO settings(key, value) VALUES(?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, json.dumps(value)),
+        )
+
+    def clear_settings(self):
+        self.db.execute("DELETE FROM settings")
+
     # chatter -------------------------------------------------------------
+
+    def clear_chatter(self):
+        self.db.execute("DELETE FROM chatter")
 
     def add_chatter(self, place, author, text):
         self.db.execute(

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.0
+
+- The town square now shows the date on the village notice board.
+- Behind-the-scenes tools for the game's owner.
+
 ## 0.3.1
 
 - High/Low now deals each hand from a real shuffled 52-card deck instead of rolling every
