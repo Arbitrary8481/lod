@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.1
+
+- The forge and armoury now list upgrades and downgrades separately, marked with
+  ▲ / ▼ and the stat change. Prices shown are what you pay after trade-in, items you
+  can't afford are greyed out, and the best upgrade you can afford is called out.
+- Downgrading asks you to confirm, and every purchase shows your stat before and after.
+
 ## 0.4.0
 
 - The town square now shows the date on the village notice board.

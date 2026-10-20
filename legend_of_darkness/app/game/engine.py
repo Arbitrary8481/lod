@@ -853,6 +853,7 @@ class Game(AdminMixin):
 
     def _shop_view(self, p, s, kind):
         names = D.WEAPONS if kind == "weapons" else D.ARMOR
+        stat = "attack" if kind == "weapons" else "defence"
         current = p["weapon" if kind == "weapons" else "armor"]
         trade = int(D.gear_cost(current) * 0.75)
         if kind == "weapons":
@@ -861,38 +862,75 @@ class Game(AdminMixin):
         else:
             s.say("{W}%s{0} looks you up and down. \"%s won't stop much. Let's fix that.\""
                   % (D.ARMORER, D.ARMOR[current]))
-        s.say("Your current gear is worth {y}%d{0} gold in trade." % trade, "")
-        s.section("For Sale")
-        for tier in range(1, len(names)):
-            if tier == current:
-                continue
-            cost = D.gear_cost(tier)
-            colour = "{G}" if p["gold"] + trade >= cost else "{w}"
-            label = "%s%s{0} (%s %d) - %d gold" % (
-                colour, names[tier], "dmg" if kind == "weapons" else "def", tier, cost)
+        s.say(
+            "",
+            "You're using {W}%s{0} (+%d %s), worth {y}%s{0} gold in trade."
+            % (names[current], current, stat, "{:,}".format(trade)),
+            "Prices below are what you pay after trading it in. You have {Y}%s{0} gold."
+            % "{:,}".format(p["gold"]),
+            "",
+        )
+        ups = [(t, D.gear_cost(t) - trade) for t in range(current + 1, len(names))]
+        affordable = [(t, net) for t, net in ups if net <= p["gold"]]
+        if affordable:
+            t, net = affordable[-1]
+            s.say("{G}\u25b2 Best upgrade you can afford:{0} {W}%s{0} (+%d %s) for {Y}%s{0} gold."
+                  % (names[t], t - current, stat, "{:,}".format(net)))
+        elif ups:
+            t, net = ups[0]
+            s.say("{w}You can't afford an upgrade yet. The %s (+1 %s) needs %s more gold.{0}"
+                  % (names[t], stat, "{:,}".format(net - p["gold"])))
+        else:
+            s.say("{G}You already own the finest %s in the land.{0}"
+                  % ("weapon" if kind == "weapons" else "armour"))
+        s.say("{G}\u25b2{0} = upgrade, {r}\u25bc{0} = downgrade. Grey items are out of reach. "
+              "Downgrades pay you the difference.")
+        s.section("Upgrades")
+        for tier, net in ups:
+            colour = "{G}" if net <= p["gold"] else "{w}"
+            label = "%s%s \u25b2+%d  %sg{0}" % (colour, names[tier], tier - current,
+                                                "{:,}".format(net))
             s.add(label, "%s.buy:%d" % (kind, tier), "")
+        if current > 1:
+            s.section("Downgrades")
+            for tier in range(current - 1, 0, -1):
+                back = trade - D.gear_cost(tier)
+                label = "{w}%s{0} {r}\u25bc-%d{0} {y}+%sg{0}" % (
+                    names[tier], current - tier, "{:,}".format(back))
+                s.add(label, "%s.buy:%d" % (kind, tier), "",
+                      prompt="Downgrade to the %s (-%d %s)? Type YES to confirm."
+                      % (names[tier], current - tier, stat))
         self._back_to_village(s)
 
-    def _shop_buy(self, p, kind, tier):
+    def _shop_buy(self, p, kind, tier, confirm=None):
         slot = "weapon" if kind == "weapons" else "armor"
         names = D.WEAPONS if kind == "weapons" else D.ARMOR
+        stat = "attack" if kind == "weapons" else "defence"
         try:
             tier = int(tier)
         except ValueError:
             return
         if not 1 <= tier < len(names) or tier == p[slot]:
             return
+        if tier < p[slot] and (confirm or "").strip().lower() != "yes":
+            p["flash"].append("{w}You keep your %s.{0}" % names[p[slot]])
+            return
         trade = int(D.gear_cost(p[slot]) * 0.75)
         net = D.gear_cost(tier) - trade
         if p["gold"] < net:
             p["flash"].append("{r}You can't afford the %s.{0}" % names[tier])
             return
+        before = attack(p) if kind == "weapons" else defence(p)
         p["gold"] -= net
         old, p[slot] = p[slot], tier
+        after = attack(p) if kind == "weapons" else defence(p)
         p["flash"].append("{G}You trade in your %s and walk away with a %s!{0}"
                           % (names[old], names[tier]))
+        p["flash"].append("Your %s goes from %d to %s%d{0}." % (
+            stat, before, "{G}" if after > before else "{r}", after))
         if net < 0:
             p["flash"].append("You receive {y}%d{0} gold in change." % -net)
+        p["flash"].append("")
 
     def view_weapons(self, p, s):
         self._shop_view(p, s, "weapons")
@@ -901,10 +939,10 @@ class Game(AdminMixin):
         self._shop_view(p, s, "armor")
 
     def do_weapons_buy(self, p, arg, value):
-        self._shop_buy(p, "weapons", arg)
+        self._shop_buy(p, "weapons", arg, value)
 
     def do_armor_buy(self, p, arg, value):
-        self._shop_buy(p, "armor", arg)
+        self._shop_buy(p, "armor", arg, value)
 
     # ---------------------------------------------------------------- healer
 

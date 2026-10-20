@@ -115,6 +115,45 @@ class GameTest(unittest.TestCase):
         expected = 10000 - (D.gear_cost(5) - int(D.gear_cost(1) * 0.75))
         self.assertEqual(p["gold"], expected)
 
+    def test_shop_separates_upgrades_and_downgrades(self):
+        self.make()
+        self.edit(weapon=5, gold=500)
+        screen = self.game.act("u1", "goto:weapons")
+        sections = {sec["h"]: sec["items"] for sec in screen["nav"]}
+        ups, downs = sections["Upgrades"], sections["Downgrades"]
+        self.assertEqual([i["a"] for i in ups][:2], ["weapons.buy:6", "weapons.buy:7"])
+        self.assertEqual([i["a"] for i in downs], ["weapons.buy:%d" % t for t in (4, 3, 2, 1)])
+        self.assertIn("\u25b2+1", ups[0]["label"])
+        self.assertIn("\u25bc-1", downs[0]["label"])
+        net = D.gear_cost(6) - int(D.gear_cost(5) * 0.75)
+        self.assertIn("{:,}g".format(net), ups[0]["label"])
+        self.assertTrue(any("can't afford an upgrade yet" in line for line in screen["text"]))
+        self.edit(gold=3000)
+        screen = self.game.act("u1", "goto:weapons")
+        best = [line for line in screen["text"] if "Best upgrade you can afford" in line][0]
+        self.assertIn(D.WEAPONS[7], best)  # tier 7 costs under 3,000 after trade-in; tier 8 doesn't
+        self.assertTrue(all("prompt" in i for i in downs))
+        self.assertFalse(any("prompt" in i for i in ups))
+
+    def test_shop_downgrade_needs_confirmation(self):
+        self.make()
+        self.edit(weapon=5, gold=0)
+        self.game.act("u1", "goto:weapons")
+        self.game.act("u1", "weapons.buy:2", "no")
+        self.assertEqual(self.p()["weapon"], 5)
+        screen = self.game.act("u1", "weapons.buy:2", "yes")
+        p = self.p()
+        self.assertEqual(p["weapon"], 2)
+        self.assertEqual(p["gold"], int(D.gear_cost(5) * 0.75) - D.gear_cost(2))
+        self.assertTrue(any("from 6 to {r}3" in line for line in screen["text"]))
+
+    def test_shop_at_best_gear_has_no_upgrades(self):
+        self.make()
+        self.edit(armor=15)
+        screen = self.game.act("u1", "goto:armor")
+        self.assertNotIn("Upgrades", [sec["h"] for sec in screen["nav"] if sec["items"]])
+        self.assertTrue(any("finest armour" in line for line in screen["text"]))
+
     def test_bank_and_interest(self):
         self.make()
         self.edit(gold=1000)
