@@ -210,6 +210,7 @@ class Game(AdminMixin):
         p["flirted"] = False
         p["master_lost"] = False
         p["room"] = False
+        p["gem_daily"] = {}
         p["fight"] = None
         p["event"] = None
         if p.get("cards"):
@@ -248,7 +249,7 @@ class Game(AdminMixin):
             "village": D.VILLAGE, "forest": "The Duskwood", "fight": "Battle!",
             "event": "Something Stirs", "weapons": "%s's Forge" % D.SMITH,
             "armor": "%s's Armoury" % D.ARMORER, "healer": "%s's Hut" % D.HEALER,
-            "inn": D.INN, "cards": "High/Low", "bank": "Coyne & Daughters Bank", "training": "Training Grounds",
+            "inn": D.INN, "cards": "High/Low", "gems": D.GEM_SHOP, "bank": "Coyne & Daughters Bank", "training": "Training Grounds",
             "fame": "Hall of Fame", "news": "Daily News", "pvp": "The Fields",
             "shades": "The Shades", "dk": "Victory Over the Wyrm", "admin": "Control Panel",
         }.get(p["loc"], D.VILLAGE)
@@ -395,6 +396,7 @@ class Game(AdminMixin):
         s.add("%s's Forge" % D.SMITH.split()[0], "goto:weapons", "W")
         s.add("%s's Armoury" % D.ARMORER.split()[0], "goto:armor", "A")
         s.add("The Bank", "goto:bank", "B")
+        s.add(D.GEM_SHOP, "goto:gems", "G")
         s.add("%s's Hut" % D.HEALER, "goto:healer", "H")
         s.section("Tavern Lane")
         s.add(D.INN, "goto:inn", "I")
@@ -1211,6 +1213,143 @@ class Game(AdminMixin):
         if game["streak"] >= 5 and profit >= 500:
             self.news("{Y}%s{0} won %d gold at High/Low in %s after a streak of %d!"
                       % (p["name"], game["pot"], D.INN, game["streak"]))
+
+    # ------------------------------------------------------------- gem shop
+
+    # (key, label, gems, once per day, description)
+    GEM_GOODS = [
+        ("elixir", "Elixir of Mending", 1, False, "heals you completely"),
+        ("crystal", "Focus Crystal", 1, False, "restores all your %s uses"),
+        ("haste", "Draught of Haste", 2, True, "+3 forest fights today"),
+        ("heart", "Heartstone", 3, True, "permanently +1 maximum hit points"),
+        ("bauble", "Glittering Bauble", 1, False, "+1 charm"),
+    ]
+
+    def gem_buy_price(self, p):
+        return 50 + 40 * p["level"]
+
+    def gem_sell_price(self, p):
+        return self.gem_buy_price(p) // 2
+
+    def _gem_good_useful(self, p, key):
+        if key == "elixir":
+            return p["hp"] < max_hp(p)
+        if key == "crystal":
+            return p["skill_uses"] < skill_max(p)
+        return True
+
+    def view_gems(self, p, s):
+        buy, sell = self.gem_buy_price(p), self.gem_sell_price(p)
+        skill = D.SPECIALTIES[p["specialty"]]["skill"]
+        used = p.get("gem_daily") or {}
+        s.say(
+            "{W}%s{0} peers at you through a jeweller's loupe, surrounded by glittering "
+            "cases. \"Gems for sale, gems bought, and a few wonders for those who can pay "
+            "in stone.\"" % D.GEMCUTTER,
+            "",
+            "You have {C}%d{0} gem%s and {Y}%s{0} gold." % (
+                p["gems"], "" if p["gems"] == 1 else "s", "{:,}".format(p["gold"])),
+            "A gem costs {Y}%s{0} gold. %s buys them back for {Y}%s{0}."
+            % ("{:,}".format(buy), D.GEMCUTTER.split()[0], "{:,}".format(sell)),
+            "",
+            "{c}Wonders, priced in gems:{0}",
+        )
+        for key, label, cost, daily, desc in self.GEM_GOODS:
+            note = ""
+            if daily and used.get(key):
+                note = " {r}(sold out for you today){0}"
+            elif not self._gem_good_useful(p, key):
+                note = " {w}(you don't need this right now){0}"
+            s.say("  {M}%s{0} - %d gem%s - %s%s%s" % (
+                label, cost, "" if cost == 1 else "s", desc.replace("%s", skill),
+                " {w}(once a day){0}" if daily else "", note))
+        s.section("Buy Gems")
+        for n in (1, 5):
+            colour = "{G}" if p["gold"] >= n * buy else "{w}"
+            s.add("%sBuy %d gem%s - %sg{0}" % (colour, n, "" if n == 1 else "s",
+                                               "{:,}".format(n * buy)),
+                  "gems.buy:%d" % n, str(n))
+        if p["gems"]:
+            s.section("Sell Gems")
+            s.add("Sell 1 gem - %sg" % "{:,}".format(sell), "gems.sell:1", "S")
+            if p["gems"] > 1:
+                s.add("Sell all %d gems - %sg" % (p["gems"], "{:,}".format(p["gems"] * sell)),
+                      "gems.sell:all", "A")
+        s.section("Wonders")
+        for key, label, cost, daily, desc in self.GEM_GOODS:
+            if (daily and used.get(key)) or not self._gem_good_useful(p, key):
+                continue
+            colour = "{M}" if p["gems"] >= cost else "{w}"
+            s.add("%s%s - %d gem%s{0}" % (colour, label, cost, "" if cost == 1 else "s"),
+                  "gems.wonder:" + key, "")
+        self._back_to_village(s)
+
+    def do_gems_buy(self, p, arg, value):
+        try:
+            n = int(arg)
+        except ValueError:
+            return
+        if n not in (1, 5):
+            return
+        cost = n * self.gem_buy_price(p)
+        if p["gold"] < cost:
+            p["flash"].append("{r}\"Come back when your purse is heavier.\"{0}")
+            return
+        p["gold"] -= cost
+        p["gems"] += n
+        p["flash"].append("{C}You buy %d gem%s for %s gold.{0}"
+                          % (n, "" if n == 1 else "s", "{:,}".format(cost)))
+
+    def do_gems_sell(self, p, arg, value):
+        n = p["gems"] if arg == "all" else 1
+        if n < 1 or p["gems"] < n:
+            return
+        gold = n * self.gem_sell_price(p)
+        p["gems"] -= n
+        p["gold"] += gold
+        p["flash"].append("{Y}You sell %d gem%s for %s gold.{0}"
+                          % (n, "" if n == 1 else "s", "{:,}".format(gold)))
+
+    def do_gems_wonder(self, p, arg, value):
+        good = next((g for g in self.GEM_GOODS if g[0] == arg), None)
+        if not good:
+            return
+        key, label, cost, daily, desc = good
+        used = p["gem_daily"] = p.get("gem_daily") or {}
+        if daily and used.get(key):
+            p["flash"].append("{r}\"Only one of those a day, dear.\"{0}")
+            return
+        if not self._gem_good_useful(p, key):
+            p["flash"].append("{w}\"You don't need that right now.\"{0}")
+            return
+        if p["gems"] < cost:
+            p["flash"].append("{r}\"That costs %d gem%s. You have %d.\"{0}"
+                              % (cost, "" if cost == 1 else "s", p["gems"]))
+            return
+        p["gems"] -= cost
+        if daily:
+            used[key] = True
+        if key == "elixir":
+            heal = max_hp(p) - p["hp"]
+            p["hp"] = max_hp(p)
+            p["flash"].append("{M}The elixir tastes of starlight. You heal %d hit points.{0}"
+                              % heal)
+        elif key == "crystal":
+            p["skill_uses"] = skill_max(p)
+            p["flash"].append("{M}The crystal flares and your %s returns in full.{0}"
+                              % D.SPECIALTIES[p["specialty"]]["skill"])
+        elif key == "haste":
+            p["turns"] += 3
+            p["flash"].append("{M}Your heart races. You could fight all night!{0} "
+                              "(+3 forest fights)")
+        elif key == "heart":
+            p["bonus_hp"] += 1
+            p["hp"] += 1
+            p["flash"].append("{M}The Heartstone dissolves into your chest. You feel "
+                              "permanently hardier!{0} (+1 max HP)")
+        elif key == "bauble":
+            p["charm"] += 1
+            p["flash"].append("{M}You pin the bauble to your collar. Heads turn.{0} (+1 charm)")
 
     # ------------------------------------------------------------------ bank
 

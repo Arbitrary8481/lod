@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.0
+
+- New gem shop on Market Street: The Glittering Facet. Buy gems (price rises with your
+  level), sell them back at half price, or spend them on wonders: a full-heal elixir,
+  a crystal that restores your specialty skill, a once-a-day draught for +3 forest fights,
+  a once-a-day Heartstone for a permanent +1 max HP, and charm-boosting baubles.
+
 ## 0.4.1
 
 - The forge and armoury now list upgrades and downgrades separately, marked with

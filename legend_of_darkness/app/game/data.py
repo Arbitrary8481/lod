@@ -14,6 +14,8 @@ HEALER = "Old Ysolde"
 SMITH = "Garrick Ironhand"
 ARMORER = "Bettany Steelweave"
 BANKER = "Fenwick Coyne"
+GEMCUTTER = "Cassia Brightfacet"
+GEM_SHOP = "The Glittering Facet"
 DEATH_LORD = "Malgrath, Keeper of Shades"
 DRAGON = "the Shadow Wyrm"
 

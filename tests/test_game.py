@@ -154,6 +154,70 @@ class GameTest(unittest.TestCase):
         self.assertNotIn("Upgrades", [sec["h"] for sec in screen["nav"] if sec["items"]])
         self.assertTrue(any("finest armour" in line for line in screen["text"]))
 
+    # ---------------------------------------------------------- gem shop
+
+    def at_gem_shop(self, **changes):
+        self.make()
+        self.edit(**changes)
+        self.game.act("u1", "goto:gems")
+
+    def test_gem_shop_is_on_market_street(self):
+        self.make()
+        screen = self.game.view("u1")
+        market = [sec for sec in screen["nav"] if sec["h"] == "Market Street"][0]
+        self.assertIn("goto:gems", [i["a"] for i in market["items"]])
+
+    def test_gem_buy_and_sell_prices(self):
+        self.at_gem_shop(level=3, gold=1000, gems=0)
+        buy, sell = 50 + 40 * 3, (50 + 40 * 3) // 2
+        self.game.act("u1", "gems.buy:5")
+        self.assertEqual((self.p()["gold"], self.p()["gems"]), (1000 - 5 * buy, 5))
+        self.game.act("u1", "gems.sell:1")
+        self.assertEqual((self.p()["gold"], self.p()["gems"]), (1000 - 5 * buy + sell, 4))
+        self.game.act("u1", "gems.sell:all")
+        self.assertEqual((self.p()["gold"], self.p()["gems"]), (1000 - 5 * buy + 5 * sell, 0))
+        self.assertNotIn("gems.sell:1", self.p()["allowed"])
+
+    def test_gem_buy_needs_gold(self):
+        self.at_gem_shop(gold=10, gems=0)
+        screen = self.game.act("u1", "gems.buy:1")
+        self.assertEqual((self.p()["gold"], self.p()["gems"]), (10, 0))
+        self.assertIn("purse is heavier", " ".join(screen["text"]))
+
+    def test_gem_wonders(self):
+        self.at_gem_shop(gems=10, hp=3, skill_uses=0, turns=5, charm=0)
+        for key in ("elixir", "crystal", "haste", "heart", "bauble"):
+            self.game.act("u1", "gems.wonder:" + key)
+        p = self.p()
+        self.assertEqual(p["gems"], 10 - (1 + 1 + 2 + 3 + 1))
+        self.assertEqual(p["bonus_hp"], 1)
+        self.assertEqual(p["hp"], max_hp(p))
+        self.assertEqual((p["turns"], p["charm"], p["skill_uses"]), (8, 1, 1))
+
+    def test_gem_wonders_hidden_when_useless_or_used(self):
+        self.at_gem_shop(gems=10, hp=10, skill_uses=1)  # full health, full skill
+        allowed = self.p()["allowed"]
+        self.assertNotIn("gems.wonder:elixir", allowed)
+        self.assertNotIn("gems.wonder:crystal", allowed)
+        self.game.act("u1", "gems.wonder:haste")
+        self.assertNotIn("gems.wonder:haste", self.p()["allowed"])
+        self.assertIn("gems.wonder:bauble", self.p()["allowed"])
+
+    def test_gem_daily_limits_reset_with_new_day(self):
+        self.at_gem_shop(gems=10)
+        self.game.act("u1", "gems.wonder:heart")
+        self.assertNotIn("gems.wonder:heart", self.p()["allowed"])
+        self.next_day()
+        self.game.view("u1")
+        self.game.act("u1", "goto:gems")
+        self.assertIn("gems.wonder:heart", self.p()["allowed"])
+
+    def test_gem_wonder_needs_gems(self):
+        self.at_gem_shop(gems=2)
+        screen = self.game.act("u1", "gems.wonder:heart")
+        self.assertEqual((self.p()["gems"], self.p()["bonus_hp"]), (2, 0))
+        self.assertIn("costs 3 gems", " ".join(screen["text"]))
+
     def test_bank_and_interest(self):
         self.make()
         self.edit(gold=1000)
